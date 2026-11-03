@@ -1,0 +1,6 @@
+*.pt
+*.pth
+data/
+runs/
+__pycache__/
+.tmp/

@@ -1,0 +1,175 @@
+{
+ "params": 88385170,
+ "epochs": 20,
+ "capped": false,
+ "minutes": 3.5,
+ "test_loss": 3.705187085630944,
+ "test_ppl": 40.657653068070154,
+ "test_acc": 0.5617588638892107,
+ "bleu_greedy": 20.019903835445856,
+ "bleu_greedy_beam_subset": 19.703777512526788,
+ "bleu_beam": 20.703343095394136,
+ "beam_width": 4,
+ "beam_pairs": 500,
+ "history": [
+  {
+   "epoch": 1,
+   "train_loss": 5.981208610534668,
+   "test_loss": 5.196945293858096,
+   "test_acc": 0.26210068580082774
+  },
+  {
+   "epoch": 2,
+   "train_loss": 4.916325581073761,
+   "test_loss": 4.845844419051732,
+   "test_acc": 0.29851880240738177
+  },
+  {
+   "epoch": 3,
+   "train_loss": 4.449941623210907,
+   "test_loss": 4.537557866415676,
+   "test_acc": 0.3354433099456481
+  },
+  {
+   "epoch": 4,
+   "train_loss": 3.969351977109909,
+   "test_loss": 4.225657700657236,
+   "test_acc": 0.37076423338793973
+  },
+  {
+   "epoch": 5,
+   "train_loss": 3.5186740517616273,
+   "test_loss": 3.989189606626039,
+   "test_acc": 0.40414397990285544
+  },
+  {
+   "epoch": 6,
+   "train_loss": 3.0601196587085724,
+   "test_loss": 3.772205057851261,
+   "test_acc": 0.43748154023752367
+  },
+  {
+   "epoch": 7,
+   "train_loss": 2.5738204598426817,
+   "test_loss": 3.6720217842489684,
+   "test_acc": 0.4619572079422635
+  },
+  {
+   "epoch": 8,
+   "train_loss": 2.0796201854944227,
+   "test_loss": 3.5137066749669823,
+   "test_acc": 0.4941553812469768
+  },
+  {
+   "epoch": 9,
+   "train_loss": 1.5515783458948136,
+   "test_loss": 3.36111247501791,
+   "test_acc": 0.5177026551755897
+  },
+  {
+   "epoch": 10,
+   "train_loss": 1.1148905009031296,
+   "test_loss": 3.3152062922594148,
+   "test_acc": 0.5310376821456894
+  },
+  {
+   "epoch": 11,
+   "train_loss": 0.7667701870203019,
+   "test_loss": 3.3258740271516665,
+   "test_acc": 0.5396463633760771
+  },
+  {
+   "epoch": 12,
+   "train_loss": 0.5148492358624935,
+   "test_loss": 3.395228007999096,
+   "test_acc": 0.5453010915316433
+  },
+  {
+   "epoch": 13,
+   "train_loss": 0.33587840273976327,
+   "test_loss": 3.4130291575071916,
+   "test_acc": 0.5477064598254092
+  },
+  {
+   "epoch": 14,
+   "train_loss": 0.20853755213320255,
+   "test_loss": 3.4485102436203148,
+   "test_acc": 0.553909782543964
+  },
+  {
+   "epoch": 15,
+   "train_loss": 0.13258294127881526,
+   "test_loss": 3.536250017642794,
+   "test_acc": 0.5552601574890602
+  },
+  {
+   "epoch": 16,
+   "train_loss": 0.08376663848757744,
+   "test_loss": 3.5573355714223522,
+   "test_acc": 0.5561463520230787
+  },
+  {
+   "epoch": 17,
+   "train_loss": 0.05462749600410462,
+   "test_loss": 3.632073283421871,
+   "test_acc": 0.5569903272141101
+  },
+  {
+   "epoch": 18,
+   "train_loss": 0.03547452357597649,
+   "test_loss": 3.6338556528383203,
+   "test_acc": 0.5587627050262587
+  },
+  {
+   "epoch": 19,
+   "train_loss": 0.02432481260038912,
+   "test_loss": 3.6604313048832666,
+   "test_acc": 0.5598176937317171
+  },
+  {
+   "epoch": 20,
+   "train_loss": 0.019558831164613367,
+   "test_loss": 3.705187085630944,
+   "test_acc": 0.5617588638892107
+  }
+ ],
+ "examples": [
+  {
+   "src": "this winter has been mild .",
+   "ref": "cet hiver a ete doux .",
+   "greedy": "cette histoire a ete prise ."
+  },
+  {
+   "src": "they will be here at three .",
+   "ref": "ils seront ici a trois heures .",
+   "greedy": "ils pourraient etre ici a cette vie ."
+  },
+  {
+   "src": "i once lived in rome .",
+   "ref": "j'ai vecu un temps a rome .",
+   "greedy": "j'ai besoin de retour en cours ."
+  },
+  {
+   "src": "schedules are difficult to coordinate .",
+   "ref": "les emplois du temps sont difficiles a coordonner .",
+   "greedy": "il n'y a a aucun de comprendre ."
+  },
+  {
+   "src": "i came here hoping to see tom .",
+   "ref": "je suis venu ici en esperant voir tom .",
+   "greedy": "je suis venu ici pour tom ."
+  }
+ ],
+ "legacy_source": "C7",
+ "config": {
+  "cell": "lstm",
+  "attention": "bahdanau",
+  "enc_layers": 2,
+  "dec_layers": 2,
+  "bi_layers": 2
+ },
+ "model": "s2s_bilstm",
+ "stage": "lm03",
+ "smoke": false,
+ "torch": "2.5.1+cu124"
+}
