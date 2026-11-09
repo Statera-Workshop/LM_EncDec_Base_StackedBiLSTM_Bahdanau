@@ -107,3 +107,5 @@ LM06_LONG = dict(steps=30_000, max_hours=5.0, eval_every=2500, test_lens=(512, 2
 SEEDS.update({"lm05v3s2": 2, "lm05v3s3": 3, "lm05v3longs2": 2})
 SEEDS.update({"lm06s2": 2, "lm06s3": 3, "lm06longs2": 2})
 SEEDS.update({"lm05v3s4": 4, "lm05v3s5": 5, "lm05v3s6": 6, "lm06longs3": 3})
+SEEDS.update({"lm05v3longs3": 3})
+SEEDS.update({"lm07s2": 2, "lm07s3": 3})

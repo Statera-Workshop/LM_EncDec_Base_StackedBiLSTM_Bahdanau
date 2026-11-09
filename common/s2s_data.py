@@ -90,7 +90,7 @@ class Vocab:
         return len(self.itos)
 
 
-def load_pairs(n=12_800, seed=1234, smoke=False):
+def load_pairs(n=12_800, seed=1234, smoke=False, dedup_clean=False):
     if smoke:   # code-path test without the download
         rnd = random.Random(0)
         words = ["the", "cat", "dog", "is", "big", "small", "red", "a", "house", "runs"]
@@ -101,14 +101,22 @@ def load_pairs(n=12_800, seed=1234, smoke=False):
             pairs.append((" ".join(words[i] for i in idx), " ".join(fr[i] for i in idx)))
     else:
         raw = _raw_pairs()
-        seen_s, seen_t, pairs = set(), set(), []
+        seen_s, seen_t, seen_clean, pairs = set(), set(), set(), []
         for s, t in raw:
             if s in seen_s or t in seen_t:
                 continue
             seen_s.add(s)
             seen_t.add(t)
             if 4 < len(s.split()) < 12 and 4 < len(t.split()) < 12:
-                pairs.append((clean(s, True), clean(t, False)))
+                cs = clean(s, True)
+                # 2026-11-09: different raw sentences can become the same after cleaning (case, contractions,
+                # punctuation); with 100k pairs this put identical sources in train and test. The legacy-size
+                # runs (12,800 pairs) had no overlap and keep the original sampling.
+                if dedup_clean:
+                    if cs in seen_clean:
+                        continue
+                    seen_clean.add(cs)
+                pairs.append((cs, clean(t, False)))
         random.Random(seed).shuffle(pairs)
         pairs = pairs[:n]
     cut = int(len(pairs) * 0.8)

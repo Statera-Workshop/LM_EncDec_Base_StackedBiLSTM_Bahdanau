@@ -532,28 +532,34 @@ def build_xt_rmg(max_len):
 # distant items but learns it only in some runs. Hybrid: a GRU layer in front of the attention decoder.
 
 class HybridGRUAttn(LM):
-    def __init__(self, pos):
+    def __init__(self, pos, cell="gru", window=None, gru=True):
         super().__init__()
         from x_transformers import Decoder
         d = MODEL["dim"]
         self.emb = nn.Embedding(VOCAB, d)
-        self.gru = nn.GRU(d, d, num_layers=1, batch_first=True)
+        self.gru = (nn.LSTM if cell == "lstm" else nn.GRU)(d, d, num_layers=1, batch_first=True) if gru else None
         kw = dict(dim=d, depth=MODEL["depth"], heads=MODEL["heads"], attn_dim_head=MODEL["dim_head"], attn_flash=True)
         if pos == "alibi":
             kw["alibi_pos_bias"] = True
+        elif pos == "rope":
+            kw["rotary_pos_emb"] = True
+        if window:   # 2026-11-09: sliding-window attention (bounded KV cache); the recurrent layer carries the rest
+            kw["attn_max_attend_past"] = window
         self.attn = Decoder(**kw)
         self.norm = nn.LayerNorm(d)
         self.head = nn.Linear(d, VOCAB, bias=False)
 
     def forward(self, x):
         h = self.emb(x)
-        r, _ = self.gru(h)
-        h = self.attn(h + r)
+        if self.gru is not None:
+            r, _ = self.gru(h)
+            h = h + r
+        h = self.attn(h)
         return self.head(self.norm(h))
 
 
-def build_hyb(pos):
-    return lambda max_len: HybridGRUAttn(pos)
+def build_hyb(pos, cell="gru", window=None, gru=True):
+    return lambda max_len: HybridGRUAttn(pos, cell, window, gru)
 
 
 # --------------------------------------------------------------------------- registry
@@ -797,6 +803,30 @@ REGISTRY = {
         build=build_hyb("nope"), repo="(new) hybrid: GRU layer + x-transformers decoder", category="Long",
         model="HybridGRU_NoPE", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn.GRU", probe_max=8192, phase=6, role="hybrid memory",
         unified=["1 GRU layer (dim 512) added residually before a 6-layer nope decoder (same decoder as xt_nope)"]),
+    "hyb_gru_rope": dict(
+        build=build_hyb("rope"), repo="(new) hybrid: GRU layer + x-transformers decoder", category="Long",
+        model="HybridGRU_RoPE", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=7, role="hybrid ablation",
+        unified=["ablation of hyb_gru_nope: same GRU layer, decoder with rotary positions (does GRU fix RoPE length generalisation?)"]),
+    "hyb_lstm_nope": dict(
+        build=build_hyb("nope", "lstm"), repo="(new) hybrid: LSTM layer + x-transformers decoder", category="Long",
+        model="HybridLSTM_NoPE", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=7, role="hybrid ablation",
+        unified=["ablation of hyb_gru_nope: LSTM instead of GRU in front of the NoPE decoder"]),
+    "hyb_gru_nope_w256": dict(
+        build=build_hyb("nope", window=256), repo="(new) hybrid with sliding-window attention", category="Long",
+        model="HybridGRU_NoPE_W256", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=8, role="bounded KV cache",
+        unified=["hyb_gru_nope with attention limited to the last 256 tokens"]),
+    "hyb_gru_nope_w1024": dict(
+        build=build_hyb("nope", window=1024), repo="(new) hybrid with sliding-window attention", category="Long",
+        model="HybridGRU_NoPE_W1024", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=8, role="bounded KV cache",
+        unified=["hyb_gru_nope with attention limited to the last 1024 tokens"]),
+    "hyb_gru_rope_w256": dict(
+        build=build_hyb("rope", window=256), repo="(new) hybrid with sliding-window attention", category="Long",
+        model="HybridGRU_RoPE_W256", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=8, role="bounded KV cache",
+        unified=["hyb_gru_rope with attention limited to the last 256 tokens"]),
+    "xt_rope_w256": dict(
+        build=build_hyb("rope", window=256, gru=False), repo="(new) hybrid with sliding-window attention", category="Long",
+        model="RoPE_W256", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=8, role="bounded KV cache",
+        unified=["control: RoPE decoder limited to the last 256 tokens, no recurrent layer"]),
 }
 
 

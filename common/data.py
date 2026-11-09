@@ -298,3 +298,108 @@ def check_update(length=512, pairs=8, updates=4, queries=4):
             assert int(old[b, pos]) != int(x[b, pos + 1]), "stale value equals latest"
     return [f"update task L={length} pairs={pairs} updates={updates} queries={queries}: answers are latest values, "
             f"{min(queries // 2, updates)} updated + {queries - min(queries // 2, updates)} unchanged per sample OK"]
+
+
+# --------------------------------------------------------------------------- LM-07 state tracking (PASG)
+# K objects on a ring of 16 positions. Stream of events: "SET o p" (absolute observation) and "MOVE o d"
+# (relative motion, d in -3..+3 without 0), mixed with sensor-noise tokens. At the end "QUERY o" -> current position.
+# Unlike LM-05/06 the answer is not copied from the context: it must be integrated from all moves after the
+# last observation (state tracking, as in odometry between GPS fixes).
+ST_OBJ, ST_POS, ST_MOVE = 2, 20, 40          # object ids 2..17, positions 20..35, moves 40..45
+ST_SET, ST_MV, ST_Q = 50, 51, 52             # event markers
+ST_DELTAS = (-3, -2, -1, 1, 2, 3)
+
+
+def state_batch(batch, length, objects, queries, generator, event_rate=0.3, set_prob=0.2):
+    """Returns x, mask (answer positions), last_set (what a 'copy the last SET' shortcut would answer)."""
+    K, Q = objects, queries
+    x = torch.randint(DIS_LO, DIS_HI, (batch, length), generator=generator)
+    mask = torch.zeros(batch, length - 1, dtype=torch.bool)
+    shortcut = torch.zeros(batch, length - 1, dtype=torch.long)
+    body_end = length - 3 * Q
+    for b in range(batch):
+        pos = torch.randint(0, 16, (K,), generator=generator).tolist()
+        last_set = list(pos)
+        t = 0
+        for o in range(K):                       # initial observation of every object
+            x[b, t:t + 3] = torch.tensor([ST_SET, ST_OBJ + o, ST_POS + pos[o]])
+            t += 3
+        while t + 3 <= body_end:
+            if float(torch.rand(1, generator=generator)) < event_rate:
+                o = int(torch.randint(0, K, (1,), generator=generator))
+                if float(torch.rand(1, generator=generator)) < set_prob:
+                    x[b, t:t + 3] = torch.tensor([ST_SET, ST_OBJ + o, ST_POS + pos[o]])
+                    last_set[o] = pos[o]
+                else:
+                    k = int(torch.randint(0, len(ST_DELTAS), (1,), generator=generator))
+                    pos[o] = (pos[o] + ST_DELTAS[k]) % 16
+                    x[b, t:t + 3] = torch.tensor([ST_MV, ST_OBJ + o, ST_MOVE + k])
+                t += 3
+            else:
+                t += 1                           # one noise token
+        order = torch.randperm(K, generator=generator)[:Q].tolist()
+        t = body_end
+        for o in order:
+            x[b, t:t + 3] = torch.tensor([ST_Q, ST_OBJ + o, ST_POS + pos[o]])
+            mask[b, t + 1] = True                # prediction at the object token targets the position
+            shortcut[b, t + 1] = ST_POS + last_set[o]
+            t += 3
+    return x.long(), mask, shortcut
+
+
+def check_state(length=512, objects=4, queries=4):
+    """Replay every sample and verify each answer equals the integrated position."""
+    g = torch.Generator().manual_seed(4)
+    x, mask, short = state_batch(8, length, objects, queries, g)
+    for b in range(8):
+        pos = {}
+        seq = x[b].tolist()
+        t = 0
+        while t < length - 2:
+            m = seq[t]
+            if m == ST_SET and ST_OBJ <= seq[t + 1] < ST_OBJ + objects and ST_POS <= seq[t + 2] < ST_POS + 16:
+                pos[seq[t + 1]] = seq[t + 2] - ST_POS
+                t += 3
+            elif m == ST_MV and ST_OBJ <= seq[t + 1] < ST_OBJ + objects and ST_MOVE <= seq[t + 2] < ST_MOVE + 6:
+                pos[seq[t + 1]] = (pos[seq[t + 1]] + ST_DELTAS[seq[t + 2] - ST_MOVE]) % 16
+                t += 3
+            elif m == ST_Q:
+                assert bool(mask[b, t + 1]), "query without answer mask"
+                assert pos[seq[t + 1]] == seq[t + 2] - ST_POS, "answer is not the integrated position"
+                t += 3
+            else:
+                t += 1
+        assert int(mask[b].sum()) == queries
+    moves = int(((x == ST_MV).sum()).item()) / 8
+    return [f"state task L={length} objects={objects}: answers replayed and verified, about {moves:.0f} moves per sample"]
+
+
+# --------------------------------------------------------------------------- LM-08 sensor forecasting (PASG)
+# A quantised multi-component sensor signal (bytes 0..255): slow periodic components (some with periods longer
+# than the 512-token training window), a step change (regime), and noise. Next-sample prediction; the test
+# compares the loss on the last 256 samples with the FULL history vs only the last 512 samples, i.e. how much
+# the model gains from history beyond its training length.
+
+def sensor_batch(batch, length, generator):
+    t = torch.arange(length, dtype=torch.float32)
+    out = torch.empty(batch, length, dtype=torch.long)
+    for b in range(batch):
+        r = lambda lo, hi: lo + (hi - lo) * float(torch.rand(1, generator=generator))
+        p1, p2, p3 = r(24, 96), r(256, 1024), r(1500, 6000)          # fast, medium, slow (beyond 512)
+        a1, a2, a3 = r(10, 25), r(15, 35), r(20, 45)
+        ph = [r(0, 6.283) for _ in range(3)]
+        y = 128 + a1 * torch.sin(6.283 * t / p1 + ph[0]) + a2 * torch.sin(6.283 * t / p2 + ph[1]) \
+            + a3 * torch.sin(6.283 * t / p3 + ph[2])
+        step_at = int(r(0, length))
+        y[step_at:] += r(-30, 30)
+        y += torch.randn(length, generator=generator) * 2.0
+        out[b] = y.round().clamp(0, 255).long()
+    return out
+
+
+def check_sensor(length=2048):
+    g = torch.Generator().manual_seed(5)
+    x = sensor_batch(4, length, g)
+    assert int(x.min()) >= 0 and int(x.max()) <= 255
+    spread = float(x.float().std())
+    return [f"sensor task L={length}: values in 0..255, std {spread:.1f} (signal varies)"]

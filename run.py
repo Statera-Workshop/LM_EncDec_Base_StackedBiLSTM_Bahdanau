@@ -28,7 +28,7 @@ from common import probes, trainer
 from models.registry import REGISTRY, build, n_params, repo_name
 
 STAGES = ("check", "scaling", "overfit", "lm05", "lm02")
-EXTRA = ("verify5", "lm05v2", "lm05v2long", "lm05v2s2", "lm05v2s3", "lm02long", "lm05v3", "lm05v3long", "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm06", "lm06long", "lm06s2", "lm06s3", "lm06longs2", "lm06v", "lm05v3s4", "lm05v3s5", "lm05v3s6", "lm06longs3")   # run on demand, not part of "all"
+EXTRA = ("verify5", "lm05v2", "lm05v2long", "lm05v2s2", "lm05v2s3", "lm02long", "lm05v3", "lm05v3long", "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm06", "lm06long", "lm06s2", "lm06s3", "lm06longs2", "lm06v", "lm05v3s4", "lm05v3s5", "lm05v3s6", "lm06longs3", "lm05v3longs3", "lm07", "lm07long", "lm07s2", "lm07s3", "lm08")   # run on demand, not part of "all"
 
 
 def now():
@@ -124,6 +124,32 @@ def run_stage(stage, name, device, smoke, log):
         summary(f"{name:12s} {stage:8s} SKIPPED: {reason}")
         return dict(skipped=reason)
 
+    elif stage in ("lm07", "lm07long", "lm07s2", "lm07s3"):
+        from common.data import check_state
+        from common.config import SEEDS
+        for line in check_state() + check_state(2048):
+            log(line)
+        out.update(trainer.train_lm07(lambda: build(name), device, run_dir, log, smoke=smoke, tag=stage,
+                                      overrides=trainer.LM07_LONG if stage == "lm07long" else None,
+                                      seed_offset=SEEDS.get(stage, 0)))
+        parts = [f"{L}: {r['acc']:.2f} (copy-last-SET {r['shortcut_copy_last_set']:.2f})" if isinstance(r, dict)
+                 else f"{L}: n/a" for L, r in out["test"].items()]
+        msg = f"{name:15s} {stage:8s} state acc " + " | ".join(parts) + (" CAPPED" if out["capped"] else "")
+
+    elif stage == "lm08":
+        from common.data import check_sensor
+        for line in check_sensor():
+            log(line)
+        out.update(trainer.train_lm08(lambda: build(name), device, run_dir, log, smoke=smoke))
+        parts = []
+        for L, r in out["test"].items():
+            if isinstance(r, dict):
+                parts.append(f"{L}: {r['bits_full']:.3f}" + (f" (gain {r['gain_from_history']:+.3f})"
+                                                             if "gain_from_history" in r else ""))
+            else:
+                parts.append(f"{L}: n/a")
+        msg = f"{name:15s} lm08     sensor bits " + " | ".join(parts)
+
     elif stage == "lm06v":
         # verification of trained LM-06 models: first-block control and accuracy by copy distance
         from common.config import LM06
@@ -166,14 +192,14 @@ def run_stage(stage, name, device, smoke, log):
         msg = f"{name:15s} {stage:10s} " + " | ".join(parts) + (" CAPPED" if out["capped"] else "")
 
     elif stage in ("lm05v2", "lm05v2long", "lm05v2s2", "lm05v2s3", "lm05v3", "lm05v3long",
-                   "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm05v3s4", "lm05v3s5", "lm05v3s6"):
+                   "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm05v3s4", "lm05v3s5", "lm05v3s6", "lm05v3longs3"):
         from common.data import check_recall_v2, check_recall_v3
         from common.config import LM05V2_LONG, LM05V3, LM05V3_LONG, SEEDS
         for line in (check_recall_v3() if stage.startswith("lm05v3") else check_recall_v2()):
             log(line)
         if stage in ("lm05v3", "lm05v3s2", "lm05v3s3", "lm05v3s4", "lm05v3s5", "lm05v3s6"):
             ov = LM05V3
-        elif stage in ("lm05v3long", "lm05v3longs2"):
+        elif stage in ("lm05v3long", "lm05v3longs2", "lm05v3longs3"):
             ov = dict(LM05V3, **LM05V3_LONG)
         else:
             ov = LM05V2_LONG if stage == "lm05v2long" else None

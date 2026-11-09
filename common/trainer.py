@@ -506,3 +506,167 @@ def train_lm06(build_fn, device, run_dir, log, smoke=False, overrides=None, tag=
     return dict(steps=done, capped=capped, diverged=diverged, bf16=use_amp, final_loss=last,
                 minutes=round((time.time() - t0) / 60, 1), history=hist, test=res, config=cfg,
                 micro_batch=getattr(model, "micro_batch", None))
+
+
+# --------------------------------------------------------------------------- LM-07 state tracking / LM-08 sensor
+from common.data import state_batch, sensor_batch  # noqa: E402
+
+LM07 = dict(objects=4, queries=4, train_len=512, test_lens=(512, 2048, 8192), batch=32, steps=6000,
+            eval_every=500, eval_samples=256, max_hours=1.5)
+LM07_LONG = dict(steps=30_000, max_hours=5.0, eval_every=2500)
+LM08 = dict(train_len=512, test_lens=(512, 2048, 8192), batch=16, steps=6000, eval_every=1000, eval_samples=64,
+            tail=256, max_hours=1.5)
+
+
+@torch.no_grad()
+def state_accuracy(model, device, use_amp, length, cfg, n_samples, seed=55, batch=16):
+    model.eval()
+    g = torch.Generator().manual_seed(seed + length)
+    ok = sc = n = 0
+    batch = min(batch, n_samples)
+    for i in range(math.ceil(n_samples / batch)):
+        if i and i % 4 == 0:
+            print(f"  state eval L={length} batch {i}", flush=True)
+        x, mask, short = state_batch(batch, length, cfg["objects"], cfg["queries"], g)
+        pred = forward_chunked(model, x[:, :-1].to(device), device, use_amp).argmax(-1).cpu()
+        tgt = x[:, 1:]
+        ok += (pred[mask] == tgt[mask]).sum().item()
+        sc += (short[mask] == tgt[mask]).sum().item()
+        n += mask.sum().item()
+    model.train()
+    return dict(acc=ok / n, shortcut_copy_last_set=sc / n, chance=1 / 16)
+
+
+def _train_masked(model, device, log, cfg, make_batch, tag_name, eval_fn, smoke):
+    opt = make_optimizer(model)
+    x, mask = make_batch()
+    use_amp = first_step_with_fallback(model, opt, x.to(device), device, recall_loss_fn(mask), log)
+    if not use_amp:
+        opt = make_optimizer(model)
+    t0, done, capped, diverged, hist, last = time.time(), 0, False, False, [], float("nan")
+    for step in range(cfg["steps"]):
+        x, mask = make_batch()
+        loss, _, _ = step_once(model, opt, x.to(device), step, use_amp, device, recall_loss_fn(mask))
+        last = loss.item()
+        if not math.isfinite(last):
+            diverged = True
+            log(f"STOP non-finite loss at step {step}")
+            break
+        done = step + 1
+        if (step + 1) % 100 == 0:
+            log(f"{tag_name} step {step + 1:5d} loss {last:.4f} ({(time.time() - t0) / 60:.1f} min)")
+        if (step + 1) % cfg["eval_every"] == 0:
+            r = eval_fn(cfg["train_len"], 32)
+            hist.append(dict(step=step + 1, loss=last, **r))
+            log(f"{tag_name} step {step + 1:5d} {r}")
+        if (time.time() - t0) / 3600 > cfg["max_hours"]:
+            capped = True
+            break
+    return use_amp, dict(steps=done, capped=capped, diverged=diverged, final_loss=last, history=hist,
+                         minutes=round((time.time() - t0) / 60, 1))
+
+
+def train_lm07(build_fn, device, run_dir, log, smoke=False, overrides=None, tag="lm07", seed_offset=0):
+    cfg = dict(LM07)
+    cfg.update(overrides or {})
+    if smoke:
+        cfg.update(steps=4, eval_every=2, eval_samples=4, batch=4, test_lens=(512,))
+    torch.manual_seed(SEED + 7 + 1000 * seed_offset)
+    model = build_fn().to(device)
+    g = torch.Generator().manual_seed(SEED + 77 + 1000 * seed_offset)
+
+    def make_batch():
+        x, mask, _ = state_batch(cfg["batch"], cfg["train_len"], cfg["objects"], cfg["queries"], g)
+        return x, mask
+
+    use_amp, out = _train_masked(model, device, log, cfg, make_batch, "state",
+                                 lambda L, n: state_accuracy(model, device, False, L, cfg, n), smoke)
+    if not smoke:
+        torch.save(model.state_dict(), run_dir / f"{tag}_model.pt")
+    res = {}
+    limit = getattr(model, "max_positions", None)
+    for L in cfg["test_lens"]:
+        if limit and L > limit:
+            res[str(L)] = f"n/a (model built for <= {limit} positions)"
+            continue
+        try:
+            res[str(L)] = state_accuracy(model, device, use_amp, L, cfg, cfg["eval_samples"])
+        except torch.cuda.OutOfMemoryError:
+            res[str(L)] = "OOM"
+            torch.cuda.empty_cache()
+        except Exception as e:
+            res[str(L)] = f"n/a ({type(e).__name__})"
+        log(f"state L={L}: {res[str(L)]}")
+    out.update(bf16=use_amp, test=res, config=cfg, micro_batch=getattr(model, "micro_batch", None))
+    return out
+
+
+@torch.no_grad()
+def sensor_eval(model, device, use_amp, length, cfg, n_samples, seed=88):
+    """Loss (bits per sample) on the last `tail` samples with the full history and with only the last 512."""
+    model.eval()
+    g = torch.Generator().manual_seed(seed + length)
+    tail, full_bits, trunc_bits, n = cfg["tail"], 0.0, 0.0, 0
+    for i in range(math.ceil(n_samples / 8)):
+        x = sensor_batch(min(8, n_samples), length, g).to(device)
+        lf = forward_chunked(model, x[:, :-1], device, use_amp)[:, -tail:]
+        full_bits += F.cross_entropy(lf.reshape(-1, lf.shape[-1]), x[:, -tail:].reshape(-1), reduction="sum").item()
+        if length > cfg["train_len"]:
+            xs = x[:, -(cfg["train_len"] + 1):]
+            lt = forward_chunked(model, xs[:, :-1], device, use_amp)[:, -tail:]
+            trunc_bits += F.cross_entropy(lt.reshape(-1, lt.shape[-1]), x[:, -tail:].reshape(-1),
+                                          reduction="sum").item()
+        n += x.shape[0] * tail
+    model.train()
+    full = full_bits / n / LN2
+    out = dict(bits_full=full)
+    if length > cfg["train_len"]:
+        trunc = trunc_bits / n / LN2
+        out.update(bits_last512=trunc, gain_from_history=trunc - full)
+    return out
+
+
+def train_lm08(build_fn, device, run_dir, log, smoke=False, tag="lm08"):
+    cfg = dict(LM08)
+    if smoke:
+        cfg.update(steps=4, eval_every=2, eval_samples=2, batch=2, test_lens=(512, 2048))
+    torch.manual_seed(SEED + 8)
+    model = build_fn().to(device)
+    opt = make_optimizer(model)
+    g = torch.Generator().manual_seed(SEED + 88)
+    x = sensor_batch(cfg["batch"], cfg["train_len"] + 1, g)
+    use_amp = first_step_with_fallback(model, opt, x.to(device), device, lm02_loss, log)
+    if not use_amp:
+        opt = make_optimizer(model)
+    t0, done, capped, hist, last = time.time(), 0, False, [], float("nan")
+    for step in range(cfg["steps"]):
+        x = sensor_batch(cfg["batch"], cfg["train_len"] + 1, g)
+        loss, _, _ = step_once(model, opt, x.to(device), step, use_amp, device, lm02_loss)
+        last = loss.item()
+        if not math.isfinite(last):
+            log(f"STOP non-finite loss at step {step}")
+            break
+        done = step + 1
+        if (step + 1) % 100 == 0:
+            log(f"sensor step {step + 1:5d} bits {last / LN2:.3f} ({(time.time() - t0) / 60:.1f} min)")
+        if (time.time() - t0) / 3600 > cfg["max_hours"]:
+            capped = True
+            break
+    if not smoke:
+        torch.save(model.state_dict(), run_dir / f"{tag}_model.pt")
+    res = {}
+    limit = getattr(model, "max_positions", None)
+    for L in cfg["test_lens"]:
+        if limit and L > limit:
+            res[str(L)] = f"n/a (model built for <= {limit} positions)"
+            continue
+        try:
+            res[str(L)] = sensor_eval(model, device, use_amp, L, cfg, cfg["eval_samples"])
+        except torch.cuda.OutOfMemoryError:
+            res[str(L)] = "OOM"
+            torch.cuda.empty_cache()
+        except Exception as e:
+            res[str(L)] = f"n/a ({type(e).__name__})"
+        log(f"sensor L={L}: {res[str(L)]}")
+    return dict(steps=done, capped=capped, bf16=use_amp, final_bits=last / LN2, test=res, config=cfg,
+                minutes=round((time.time() - t0) / 60, 1))

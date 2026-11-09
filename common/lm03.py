@@ -42,17 +42,17 @@ def evaluate(model, pairs, sv, tv, device):
 
 VARIANTS = {   # lm03: legacy setting; lm03big: about 8x more pairs, 10 epochs; lm03s2: legacy setting, init seed 2
     "lm03": dict(),
-    "lm03big": dict(n_pairs=100_000, epochs=10, max_hours=3.0),
+    "lm03big": dict(n_pairs=100_000, epochs=10, max_hours=3.0, dedup_clean=True),
     "lm03s2": dict(seed=2),
 }
 
 
 def run_lm03(name, device, run_dir, log, smoke=False, variant="lm03"):
-    cfg = dict(LM03, n_pairs=12_800, seed=1234)
+    cfg = dict(LM03, n_pairs=12_800, seed=1234, dedup_clean=False)
     cfg.update(VARIANTS[variant])
     if smoke:
         cfg.update(epochs=2, batch=32, beam_pairs=8)
-    train, test, sv, tv = load_pairs(n=cfg["n_pairs"], smoke=smoke)
+    train, test, sv, tv = load_pairs(n=cfg["n_pairs"], smoke=smoke, dedup_clean=cfg["dedup_clean"])
     for line in check_pairs(train, test, sv, tv):
         log(line)
     torch.manual_seed(cfg["seed"])
