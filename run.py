@@ -28,7 +28,7 @@ from common import probes, trainer
 from models.registry import REGISTRY, build, n_params, repo_name
 
 STAGES = ("check", "scaling", "overfit", "lm05", "lm02")
-EXTRA = ("verify5", "lm05v2", "lm05v2long", "lm05v2s2", "lm05v2s3", "lm02long", "lm05v3", "lm05v3long", "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm06", "lm06long", "lm06s2", "lm06s3", "lm06longs2", "lm06v", "lm05v3s4", "lm05v3s5", "lm05v3s6", "lm06longs3", "lm05v3longs3", "lm07", "lm07long", "lm07s2", "lm07s3", "lm08")   # run on demand, not part of "all"
+EXTRA = ("verify5", "lm05v2", "lm05v2long", "lm05v2s2", "lm05v2s3", "lm02long", "lm05v3", "lm05v3long", "lm05v3s2", "lm05v3s3", "lm05v3longs2", "lm06", "lm06long", "lm06s2", "lm06s3", "lm06longs2", "lm06v", "lm05v3s4", "lm05v3s5", "lm05v3s6", "lm06longs3", "lm05v3longs3", "lm07", "lm07long", "lm07s2", "lm07s3", "lm08", "lm07longs2")   # run on demand, not part of "all"
 
 
 def now():
@@ -124,13 +124,13 @@ def run_stage(stage, name, device, smoke, log):
         summary(f"{name:12s} {stage:8s} SKIPPED: {reason}")
         return dict(skipped=reason)
 
-    elif stage in ("lm07", "lm07long", "lm07s2", "lm07s3"):
+    elif stage in ("lm07", "lm07long", "lm07s2", "lm07s3", "lm07longs2"):
         from common.data import check_state
         from common.config import SEEDS
         for line in check_state() + check_state(2048):
             log(line)
         out.update(trainer.train_lm07(lambda: build(name), device, run_dir, log, smoke=smoke, tag=stage,
-                                      overrides=trainer.LM07_LONG if stage == "lm07long" else None,
+                                      overrides=trainer.LM07_LONG if stage.startswith("lm07long") else None,
                                       seed_offset=SEEDS.get(stage, 0)))
         parts = [f"{L}: {r['acc']:.2f} (copy-last-SET {r['shortcut_copy_last_set']:.2f})" if isinstance(r, dict)
                  else f"{L}: n/a" for L, r in out["test"].items()]

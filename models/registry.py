@@ -562,6 +562,34 @@ def build_hyb(pos, cell="gru", window=None, gru=True):
     return lambda max_len: HybridGRUAttn(pos, cell, window, gru)
 
 
+# --------------------------------------------------------------------------- phase 9 (2026-11-12): mixed hybrid
+# Round-8 finding: full-attention hybrids (GRU + NoPE/RoPE) retrieve distant facts at any length but fail state
+# tracking beyond the training length; GRU + windowed RoPE tracks state at any length but cannot retrieve beyond
+# its window. Mixed hybrid: GRU, then windowed-RoPE layers (local integration), then global NoPE layers (retrieval).
+
+class HybridMix(LM):
+    def __init__(self, window=256, local_first=True, local_depth=3):
+        super().__init__()
+        from x_transformers import Decoder
+        d = MODEL["dim"]
+        self.emb = nn.Embedding(VOCAB, d)
+        self.gru = nn.GRU(d, d, num_layers=1, batch_first=True)
+        base = dict(dim=d, heads=MODEL["heads"], attn_dim_head=MODEL["dim_head"], attn_flash=True)
+        local = Decoder(depth=local_depth, rotary_pos_emb=True, attn_max_attend_past=window, **base)
+        glob = Decoder(depth=MODEL["depth"] - local_depth, **base)
+        self.blocks = nn.ModuleList([local, glob] if local_first else [glob, local])
+        self.norm = nn.LayerNorm(d)
+        self.head = nn.Linear(d, VOCAB, bias=False)
+
+    def forward(self, x):
+        h = self.emb(x)
+        r, _ = self.gru(h)
+        h = h + r
+        for blk in self.blocks:
+            h = blk(h)
+        return self.head(self.norm(h))
+
+
 # --------------------------------------------------------------------------- registry
 
 LUCID = "lucidrains/{} (MIT)"
@@ -827,6 +855,22 @@ REGISTRY = {
         build=build_hyb("rope", window=256, gru=False), repo="(new) hybrid with sliding-window attention", category="Long",
         model="RoPE_W256", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=8, role="bounded KV cache",
         unified=["control: RoPE decoder limited to the last 256 tokens, no recurrent layer"]),
+    "hyb_mix": dict(
+        build=lambda max_len: HybridMix(256, True), repo="(new) hybrid: GRU + local and global attention", category="Long",
+        model="HybridMix_LocalGlobal", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=9, role="mixed hybrid memory",
+        unified=["GRU layer, 3 sliding-window (256) RoPE layers, then 3 global NoPE layers"]),
+    "hyb_mix_r": dict(
+        build=lambda max_len: HybridMix(256, False), repo="(new) hybrid: GRU + local and global attention", category="Long",
+        model="HybridMix_GlobalLocal", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=9, role="mixed hybrid memory",
+        unified=["GRU layer, 3 global NoPE layers, then 3 sliding-window (256) RoPE layers (order ablation)"]),
+    "hyb_gru_rope_w64": dict(
+        build=build_hyb("rope", window=64), repo="(new) hybrid: GRU + local and global attention", category="Long",
+        model="HybridGRU_RoPE_W64", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=9, role="mixed hybrid memory",
+        unified=["window-size sweep: hyb_gru_rope with attention limited to the last 64 tokens"]),
+    "hyb_gru_rope_w1024": dict(
+        build=build_hyb("rope", window=1024), repo="(new) hybrid: GRU + local and global attention", category="Long",
+        model="HybridGRU_RoPE_W1024", upstream=LUCID.format("x-transformers") + ", pip 2.31.7 + torch.nn", probe_max=8192, phase=9, role="mixed hybrid memory",
+        unified=["window-size sweep: hyb_gru_rope with attention limited to the last 1024 tokens"]),
 }
 
 
